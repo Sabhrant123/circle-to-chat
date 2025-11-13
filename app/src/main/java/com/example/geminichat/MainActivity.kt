@@ -856,6 +856,7 @@ fun SettingsScreen(
         )
     }
     var showTokenSavedMessage by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     // Use the actual path where the model is expected to be downloaded
     val modelFilePath = remember { File(context.filesDir, "llm/gemma-3n-E2B-it-int4.task").absolutePath }
@@ -1057,7 +1058,7 @@ fun SettingsScreen(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             OutlinedButton(
-                                onClick = { llmVm.deleteModel() },
+                                onClick = { showDeleteConfirm = true },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Delete Downloaded Model", fontWeight = FontWeight.Bold)
@@ -1159,6 +1160,44 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = {
+                    Text(
+                        "Delete downloaded model?",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        "This will permanently remove the downloaded model file from your device. " +
+                            "You can download it again later, but it will take time and data. " +
+                            "Are you sure you want to delete it?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDeleteConfirm = false
+                            llmVm.deleteModel()
+                        }
+                    ) {
+                        Text(
+                            "Delete",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
