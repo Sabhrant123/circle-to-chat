@@ -1,24 +1,23 @@
 package com.example.geminichat.llm
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 import java.lang.StringBuilder
 import java.util.Locale
 import kotlin.math.max
@@ -72,8 +71,61 @@ class LlmViewModel(
         private set
 
     // --- Internal Properties ---
-    private val httpClient = OkHttpClient()
-    private var currentDownloadCall: Call? = null
+    private val downloadBroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ModelDownloadService.ACTION_PROGRESS -> {
+                    val progress = intent.getFloatExtra(ModelDownloadService.EXTRA_PROGRESS, 0f)
+                    downloadProgress = progress.coerceIn(0f, 1f)
+                    isDownloading = true
+                    isDownloadPaused = false
+                    downloadComplete = false
+                    needsInitialization = false
+                    error = null
+                }
+
+                ModelDownloadService.ACTION_COMPLETE -> {
+                    val path = intent.getStringExtra(ModelDownloadService.EXTRA_FILEPATH)
+                    if (!path.isNullOrBlank()) {
+                        isDownloading = false
+                        isDownloadPaused = false
+                        error = null
+                        completeDownload(File(path))
+                    }
+                }
+
+                ModelDownloadService.ACTION_ERROR -> {
+                    val msg = intent.getStringExtra(ModelDownloadService.EXTRA_ERROR_MESSAGE)
+                    if (!msg.isNullOrBlank()) {
+                        error = msg
+                    }
+                    isDownloading = false
+                    downloadComplete = false
+                    needsInitialization = false
+                    when {
+                        msg?.contains("cancel", ignoreCase = true) == true -> {
+                            isDownloadPaused = false
+                            downloadProgress = 0f
+                            downloadComplete = false
+                            needsInitialization = false
+                            isModelReady = false
+                            lastDownloadUrl = null
+                            lastFileName = null
+                            lastToken = null
+                        }
+                        msg?.contains("pause", ignoreCase = true) == true -> {
+                            isDownloadPaused = true
+                        }
+                        else -> {
+                            // Default to paused state so the user can resume from the Settings screen.
+                            isDownloadPaused = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    private var downloadReceiverRegistered = false
     private var lastDownloadUrl: String? = null
     private var lastFileName: String? = null
     private var lastToken: String? = null
@@ -98,9 +150,18 @@ class LlmViewModel(
             hfToken = savedToken
         }
 
+        registerDownloadReceiver()
     }
 
     override fun onCleared() {
+        if (downloadReceiverRegistered) {
+            try {
+                appContext.unregisterReceiver(downloadBroadcastReceiver)
+            } catch (_: IllegalArgumentException) {
+                // Receiver already unregistered; ignore.
+            }
+            downloadReceiverRegistered = false
+        }
         LlmModelHelper.cleanUp(llmInstance)
         llmInstance = null
         super.onCleared()
@@ -254,6 +315,22 @@ class LlmViewModel(
         }
     }
 
+    private fun registerDownloadReceiver() {
+        if (downloadReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(ModelDownloadService.ACTION_PROGRESS)
+            addAction(ModelDownloadService.ACTION_COMPLETE)
+            addAction(ModelDownloadService.ACTION_ERROR)
+        }
+        ContextCompat.registerReceiver(
+            appContext,
+            downloadBroadcastReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        downloadReceiverRegistered = true
+    }
+
     /**
      * Attempts to stop the current LLM inference process immediately.
      * This is the core function for the 'Stop' button feature.
@@ -291,6 +368,7 @@ class LlmViewModel(
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun downloadModel(
         downloadUrl: String,
         fileName: String,
@@ -316,170 +394,58 @@ class LlmViewModel(
             return
         }
 
-        val llmDir = File(appContext.filesDir, "llm").apply { mkdirs() }
-        val tmpFile = File(llmDir, "$fileName.part")
-        val finalFile = File(llmDir, fileName)
-
         lastDownloadUrl = downloadUrl
         lastFileName = fileName
         lastToken = hfToken
         isDownloading = true
-        if (!tmpFile.exists() || tmpFile.length() == 0L) {
-            downloadProgress = 0f
-        }
+        isDownloadPaused = false
+        downloadProgress = 0f
         downloadComplete = false
         needsInitialization = false
         isModelReady = false
         error = null
-        isDownloadPaused = false
 
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                var downloadedBytes = tmpFile.length()
-                val requestBuilder = Request.Builder()
-                    .url(downloadUrl)
-                    .header("Authorization", "Bearer $hfToken")
-
-                if (downloadedBytes > 0) {
-                    Log.d("LlmViewModel", "Resuming download from byte $downloadedBytes")
-                    requestBuilder.header("Range", "bytes=$downloadedBytes-")
-                }
-
-                val call = httpClient.newCall(requestBuilder.build())
-                currentDownloadCall = call
-
-                call.execute().use { response ->
-                    if (response.code == 416) {
-                        if (finalFile.exists()) {
-                            finalFile.delete()
-                        }
-                        if (!tmpFile.renameTo(finalFile)) {
-                            throw IOException("Failed to finalize resumed download")
-                        }
-                        if (!isValidModelFile(finalFile)) {
-                            finalFile.delete()
-                            throw IOException("Downloaded file is smaller than expected size")
-                        }
-                        withContext(Dispatchers.Main) {
-                            completeDownload(finalFile)
-                            onComplete?.invoke(finalFile.absolutePath)
-                        }
-                        return@launch
-                    }
-
-                    if (!response.isSuccessful) {
-                        val msg = if (response.code == 401) {
-                            "401 Unauthorized – invalid token"
-                        } else {
-                            "HTTP ${response.code}: ${response.message}"
-                        }
-                        throw IOException("Download failed: $msg")
-                    }
-
-                    val body = response.body ?: throw IOException("Empty response body")
-                    val reportedLength = body.contentLength()
-                    val totalBytes = if (reportedLength > 0) reportedLength + downloadedBytes else -1L
-
-                    if (totalBytes > 0 && downloadedBytes > 0) {
-                        withContext(Dispatchers.Main) {
-                            val progress = downloadedBytes.toFloat() / totalBytes.toFloat()
-                            downloadProgress = progress.coerceIn(0f, 1f)
-                        }
-                    }
-
-                    val buffer = ByteArray(8_192)
-                    var bytesRead: Int
-                    body.byteStream().use { input ->
-                        FileOutputStream(tmpFile, true).use { output ->
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                output.write(buffer, 0, bytesRead)
-                                downloadedBytes += bytesRead
-                                if (totalBytes > 0) {
-                                    val progress = downloadedBytes.toFloat() / totalBytes.toFloat()
-                                    withContext(Dispatchers.Main) {
-                                        downloadProgress = progress.coerceIn(0f, 1f)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (finalFile.exists() && finalFile != tmpFile && !finalFile.delete()) {
-                    throw IOException("Unable to replace existing model file")
-                }
-                if (!tmpFile.renameTo(finalFile)) {
-                    throw IOException("Failed to move downloaded file into place")
-                }
-
-                if (!isValidModelFile(finalFile)) {
-                    finalFile.delete()
-                    throw IOException("Downloaded file is smaller than expected size")
-                }
-
-                withContext(Dispatchers.Main) {
-                    completeDownload(finalFile)
-                    onComplete?.invoke(finalFile.absolutePath)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    when {
-                        isDownloadPaused -> {
-                            error = "Download paused."
-                        }
-                        currentDownloadCall?.isCanceled() == true -> {
-                            error = "Download cancelled."
-                            lastDownloadUrl = null
-                            lastFileName = null
-                            lastToken = null
-                        }
-                        else -> {
-                            isDownloadPaused = true
-                            error = e.message ?: "Download interrupted. Tap Resume to continue."
-                        }
-                    }
-                    downloadComplete = false
-                    Log.e("LlmViewModel", "Download failed", e)
-                }
-            } finally {
-                currentDownloadCall = null
-                withContext(Dispatchers.Main) {
-                    isDownloading = false
-                }
-            }
+        sendDownloadServiceCommand(
+            action = ModelDownloadService.ACTION_START,
+            requireForeground = true
+        ) {
+            putExtra(ModelDownloadService.EXTRA_URL, downloadUrl)
+            putExtra(ModelDownloadService.EXTRA_FILENAME, fileName)
+            putExtra(ModelDownloadService.EXTRA_TOKEN, hfToken)
         }
+
+        // onComplete callback is invoked indirectly once the service broadcasts completion.
     }
 
     fun cancelDownload() {
         if (!isDownloading && !isDownloadPaused) return
-        currentDownloadCall?.cancel()
-        viewModelScope.launch(Dispatchers.IO) {
-            lastFileName?.let { name ->
-                val tmpFile = File(File(appContext.filesDir, "llm"), "$name.part")
-                if (tmpFile.exists()) {
-                    tmpFile.delete()
-                }
-            }
-            withContext(Dispatchers.Main) {
-                downloadProgress = 0f
-                downloadComplete = false
-                needsInitialization = false
-                isDownloading = false
-                isModelReady = false
-                error = "Download cancelled."
-                isDownloadPaused = false
-                lastDownloadUrl = null
-                lastFileName = null
-                lastToken = null
-            }
-        }
+
+        sendDownloadServiceCommand(
+            action = ModelDownloadService.ACTION_CANCEL,
+            requireForeground = false
+        )
+
+        downloadProgress = 0f
+        downloadComplete = false
+        needsInitialization = false
+        isDownloading = false
+        isModelReady = false
+        error = "Download cancelled."
+        isDownloadPaused = false
+        lastDownloadUrl = null
+        lastFileName = null
+        lastToken = null
     }
 
     fun pauseDownload() {
         if (!isDownloading || isDownloadPaused) return
         isDownloadPaused = true
+        isDownloading = false
         error = "Download paused."
-        currentDownloadCall?.cancel()
+        sendDownloadServiceCommand(
+            action = ModelDownloadService.ACTION_PAUSE,
+            requireForeground = false
+        )
     }
 
     fun resumeDownload() {
@@ -488,8 +454,16 @@ class LlmViewModel(
         val fileName = lastFileName ?: return
         val token = lastToken ?: hfToken
         isDownloadPaused = false
+        isDownloading = true
         error = null
-        downloadModel(url, fileName, token)
+        sendDownloadServiceCommand(
+            action = ModelDownloadService.ACTION_RESUME,
+            requireForeground = true
+        ) {
+            putExtra(ModelDownloadService.EXTRA_URL, url)
+            putExtra(ModelDownloadService.EXTRA_FILENAME, fileName)
+            putExtra(ModelDownloadService.EXTRA_TOKEN, token)
+        }
     }
 
     private fun completeDownload(file: File) {
@@ -515,6 +489,22 @@ class LlmViewModel(
         }
         needsInitialization = false
         initialize(currentModelPath)
+    }
+
+    private fun sendDownloadServiceCommand(
+        action: String,
+        requireForeground: Boolean,
+        extrasConfigurer: Intent.() -> Unit = {}
+    ) {
+        val intent = Intent(appContext, ModelDownloadService::class.java).apply {
+            this.action = action
+            extrasConfigurer()
+        }
+        if (requireForeground) {
+            ContextCompat.startForegroundService(appContext, intent)
+        } else {
+            appContext.startService(intent)
+        }
     }
 
     private fun isValidModelFile(file: File?): Boolean {
@@ -819,7 +809,7 @@ class LlmViewModel(
 
 
     companion object {
-        private const val MIN_MODEL_FILE_BYTES = 1_000_000_000L
+        const val MIN_MODEL_FILE_BYTES = 1_000_000_000L
 
         fun provideFactory(appContext: Context, modelPath: String, token: String): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

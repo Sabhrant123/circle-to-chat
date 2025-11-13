@@ -798,6 +798,9 @@ fun SettingsScreen(
     llmVm: LlmViewModel
 ) {
     val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* No-op: download continues regardless of permission state. */ }
     var huggingFaceToken by rememberSaveable {
         mutableStateOf(
             context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
@@ -926,6 +929,18 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Button(
                                 onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        val hasPermission = ContextCompat.checkSelfPermission(
+                                            context,
+                                            Manifest.permission.POST_NOTIFICATIONS
+                                        ) == PackageManager.PERMISSION_GRANTED
+                                        if (!hasPermission) {
+                                            notificationPermissionLauncher.launch(
+                                                Manifest.permission.POST_NOTIFICATIONS
+                                            )
+                                        }
+                                    }
+
                                     val downloadUrl = "https://huggingface.co/google/gemma-3n-E2B-it-litert-preview/resolve/main/gemma-3n-E2B-it-int4.task"
                                     val fileName = "gemma-3n-E2B-it-int4.task"
                                     llmVm.downloadModel(downloadUrl, fileName, huggingFaceToken)
