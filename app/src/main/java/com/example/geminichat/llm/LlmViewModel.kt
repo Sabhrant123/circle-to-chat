@@ -544,7 +544,10 @@ class LlmViewModel(
             }
             try {
                 LlmModelHelper.resetSession(inst, enableVision = true)
-                val imgs = listOf(bitmap)
+
+                // Guard against oversized bitmaps entering the vision model
+                val resizedBitmap = prepareBitmapForLlm(bitmap)
+                val imgs = listOf(resizedBitmap)
 
                 val prefillTokens = max(estimateTokenCount(prompt), 1)
                 var firstRun = true
@@ -789,6 +792,20 @@ class LlmViewModel(
         accelerator: String?,
     ) {
         latestBenchmarkResult = llmBenchmarkResult
+    }
+
+    private fun prepareBitmapForLlm(source: Bitmap): Bitmap {
+        val maxDim = 1024
+        val w = source.width
+        val h = source.height
+        val largest = max(w, h)
+        if (largest <= maxDim) return source
+
+        val scale = maxDim.toFloat() / largest.toFloat()
+        val newW = (w * scale).toInt().coerceAtLeast(1)
+        val newH = (h * scale).toInt().coerceAtLeast(1)
+
+        return Bitmap.createScaledBitmap(source, newW, newH, true)
     }
 
     private fun estimateTokenCount(text: String): Int {

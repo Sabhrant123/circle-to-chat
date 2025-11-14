@@ -95,7 +95,9 @@ import java.io.FileOutputStream
 import android.content.pm.PackageManager
 import kotlinx.coroutines.delay
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -136,6 +138,17 @@ private fun createImageFile(context: Context): File {
     val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     val storageDir = context.cacheDir
     return File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
+}
+
+private fun Bitmap.downscaleIfTooLarge(maxDimension: Int = 1280): Bitmap {
+    val maxSide = max(width, height)
+    if (maxSide <= maxDimension) return this
+
+    val scale = maxDimension.toFloat() / maxSide.toFloat()
+    val newWidth = (width * scale).roundToInt().coerceAtLeast(1)
+    val newHeight = (height * scale).roundToInt().coerceAtLeast(1)
+
+    return Bitmap.createScaledBitmap(this, newWidth, newHeight, true)
 }
 
 class MainActivity : ComponentActivity() {
@@ -279,7 +292,7 @@ fun ChatScreen(
         if (success) {
             cameraImageUri?.let { uri ->
                 try {
-                    val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val rawBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                         val source = ImageDecoder.createSource(context.contentResolver, uri)
                         ImageDecoder.decodeBitmap(source).copy(Bitmap.Config.ARGB_8888, true)
                     } else {
@@ -287,7 +300,13 @@ fun ChatScreen(
                         MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
                             .copy(Bitmap.Config.ARGB_8888, true)
                     }
+
+                    val bitmap = rawBitmap.downscaleIfTooLarge(maxDimension = 1280)
                     onImageSelected(bitmap)
+
+                    if (rawBitmap !== bitmap) {
+                        rawBitmap.recycle()
+                    }
                 } catch (e: Exception) {
                     // TODO: surface decoding failure to the user
                 } finally {
@@ -321,7 +340,7 @@ fun ChatScreen(
         if (uri != null) {
             try {
                 // Use ContentResolver to get Bitmap
-                val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val rawBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     val source = ImageDecoder.createSource(context.contentResolver, uri)
                     ImageDecoder.decodeBitmap(source).copy(Bitmap.Config.ARGB_8888, true)
                 } else {
@@ -330,7 +349,12 @@ fun ChatScreen(
                         .copy(Bitmap.Config.ARGB_8888, true)
                 }
 
-                if (bitmap != null) onImageSelected(bitmap)
+                val bitmap = rawBitmap.downscaleIfTooLarge(maxDimension = 1280)
+                onImageSelected(bitmap)
+
+                if (rawBitmap !== bitmap) {
+                    rawBitmap.recycle()
+                }
             } catch (e: Exception) {
                 // Log or handle error as needed
             }
@@ -670,13 +694,12 @@ fun ChatScreen(
                                     // Save image to internal storage if attached
                                     var imageUri: String? = null
                                     if (attachedImage != null) {
-                                        val fileName = "img_${System.currentTimeMillis()}.png"
+                                        val fileName = "img_${System.currentTimeMillis()}.jpg"
                                         val file = File(context.filesDir, fileName)
                                         try {
-                                            val outputStream = FileOutputStream(file)
-                                            attachedImage.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-                                            outputStream.flush()
-                                            outputStream.close()
+                                            FileOutputStream(file).use { outputStream ->
+                                                attachedImage.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                                            }
                                             imageUri = Uri.fromFile(file).toString()
                                         } catch (e: Exception) {
                                             // Handle error
