@@ -101,6 +101,11 @@ import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.circletochat.ai.model.recommendation.ModelRecommendationEngine
+import kotlinx.coroutines.*
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarData
 
 
 data class Message(
@@ -184,39 +189,61 @@ class MainActivity : ComponentActivity() {
             )
 
             MiraEdgeTheme(darkTheme = isDarkTheme) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    when (currentScreen) {
-                        "chat" -> ChatScreen(
-                            onSettingsClick = { currentScreen = "settings" },
-                            onImageSelected = { bitmap ->
-                                imageToCrop = bitmap
-                                currentScreen = "crop"
-                            },
-                            attachedImage = attachedImage,
-                            onRemoveImage = { attachedImage = null },
-                            llmVm = llmVm
-                        )
-                        "settings" -> SettingsScreen(
-                            isDarkTheme = isDarkTheme,
-                            onThemeToggle = { isDarkTheme = it },
-                            onBackClick = { currentScreen = "chat" },
-                            llmVm = llmVm // Pass llmVm here
-                        )
-                        "crop" -> imageToCrop?.let { bitmap ->
-                            ImageCropScreen(
-                                imageBitmap = bitmap,
-                                onCropComplete = { croppedBitmap ->
-                                    currentScreen = "chat"
-                                    imageToCrop = null
-                                    attachedImage = croppedBitmap
+                val snackbarHostState = remember { SnackbarHostState() }
+                
+                // Show model recommendation popup on first launch with detailed explanation
+                LaunchedEffect(Unit) {
+                    val (recommendedModelName, explanation) = ModelRecommendationEngine.recommendBestModelWithDetails(appContext)
+                    val message = "This Model is best for your mobile: $recommendedModelName\n${explanation}"
+                    snackbarHostState.showSnackbar(
+                        message = message,
+                        duration = SnackbarDuration.Long
+                    )
+                    // Ensure visible for ~20 seconds then dismiss
+                    delay(20_000)
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                }
+                
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        when (currentScreen) {
+                            "chat" -> ChatScreen(
+                                onSettingsClick = { currentScreen = "settings" },
+                                onImageSelected = { bitmap ->
+                                    imageToCrop = bitmap
+                                    currentScreen = "crop"
                                 },
-                                onCancel = {
-                                    currentScreen = "chat"
-                                    imageToCrop = null
-                                }
+                                attachedImage = attachedImage,
+                                onRemoveImage = { attachedImage = null },
+                                llmVm = llmVm
                             )
+                            "settings" -> SettingsScreen(
+                                isDarkTheme = isDarkTheme,
+                                onThemeToggle = { isDarkTheme = it },
+                                onBackClick = { currentScreen = "chat" },
+                                llmVm = llmVm // Pass llmVm here
+                            )
+                            "crop" -> imageToCrop?.let { bitmap ->
+                                ImageCropScreen(
+                                    imageBitmap = bitmap,
+                                    onCropComplete = { croppedBitmap ->
+                                        currentScreen = "chat"
+                                        imageToCrop = null
+                                        attachedImage = croppedBitmap
+                                    },
+                                    onCancel = {
+                                        currentScreen = "chat"
+                                        imageToCrop = null
+                                    }
+                                )
+                            }
                         }
                     }
+                    
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
                 }
             }
         }
