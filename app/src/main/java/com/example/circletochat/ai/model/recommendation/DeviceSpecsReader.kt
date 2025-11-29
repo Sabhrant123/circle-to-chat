@@ -31,24 +31,34 @@ object DeviceSpecsReader {
     }
 
     /**
-     * Gets total RAM available on the device using Runtime.
+     * Gets total RAM available on the device using ActivityManager.MemoryInfo.totalMem when available.
      */
     private fun getTotalRamMB(context: Context): Int {
         return try {
-            val runtime = Runtime.getRuntime()
-            (runtime.maxMemory() / (1024 * 1024)).toInt()
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memInfo)
+            // ActivityManager.MemoryInfo.totalMem available since API 16 (JELLY_BEAN)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN) {
+                (memInfo.totalMem / (1024 * 1024)).toInt()
+            } else {
+                // Fallback to JVM runtime heap size (best-effort, not device RAM)
+                (Runtime.getRuntime().maxMemory() / (1024 * 1024)).toInt()
+            }
         } catch (e: Exception) {
             0
         }
     }
 
     /**
-     * Gets currently available free RAM using Runtime.
+     * Gets currently available free RAM using ActivityManager.MemoryInfo.availMem when available.
      */
     private fun getFreeRamMB(context: Context): Int {
         return try {
-            val runtime = Runtime.getRuntime()
-            (runtime.freeMemory() / (1024 * 1024)).toInt()
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memInfo)
+            (memInfo.availMem / (1024 * 1024)).toInt()
         } catch (e: Exception) {
             0
         }

@@ -106,6 +106,11 @@ import kotlinx.coroutines.*
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarData
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 
 
 data class Message(
@@ -190,19 +195,6 @@ class MainActivity : ComponentActivity() {
 
             MiraEdgeTheme(darkTheme = isDarkTheme) {
                 val snackbarHostState = remember { SnackbarHostState() }
-                
-                // Show model recommendation popup on first launch with detailed explanation
-                LaunchedEffect(Unit) {
-                    val (recommendedModelName, explanation) = ModelRecommendationEngine.recommendBestModelWithDetails(appContext)
-                    val message = "This Model is best for your mobile: $recommendedModelName\n${explanation}"
-                    snackbarHostState.showSnackbar(
-                        message = message,
-                        duration = SnackbarDuration.Long
-                    )
-                    // Ensure visible for ~20 seconds then dismiss
-                    delay(20_000)
-                    snackbarHostState.currentSnackbarData?.dismiss()
-                }
                 
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(modifier = Modifier.fillMaxSize()) {
@@ -907,6 +899,15 @@ fun SettingsScreen(
     }
     var showTokenSavedMessage by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var recommendedModel by remember { mutableStateOf("") }
+    var recommendationExplanation by remember { mutableStateOf("") }
+    
+    // Load model recommendation on screen init
+    LaunchedEffect(Unit) {
+        val (model, explanation) = ModelRecommendationEngine.recommendBestModelWithDetails(context)
+        recommendedModel = model
+        recommendationExplanation = explanation
+    }
 
     // Use the actual path where the model is expected to be downloaded
     val modelFilePath = remember { File(context.filesDir, "llm/gemma-3n-E2B-it-int4.task").absolutePath }
@@ -1208,6 +1209,140 @@ fun SettingsScreen(
                         checked = isDarkTheme,
                         onCheckedChange = onThemeToggle
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Model Recommendation Section - Permanently Displayed
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                ),
+                border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Recommended Model",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (recommendedModel.isNotBlank()) {
+                            Surface(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.primary),
+                                color = MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    text = recommendedModel,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "This model is best for your mobile",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    if (recommendationExplanation.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = recommendationExplanation,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Display both models for reference
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ElevatedCard(
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(
+                                    width = if (recommendedModel == "gemma-E2b") 2.dp else 1.dp,
+                                    color = if (recommendedModel == "gemma-E2b") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = if (recommendedModel == "gemma-E2b") MaterialTheme.colorScheme.surfaceBright else MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "gemma-E2b",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    text = "RAM: 3GB • Storage: 1GB",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if (recommendedModel == "gemma-E2b") {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "✓ Selected",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        ElevatedCard(
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(
+                                    width = if (recommendedModel == "gemma-E4b") 2.dp else 1.dp,
+                                    color = if (recommendedModel == "gemma-E4b") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = if (recommendedModel == "gemma-E4b") MaterialTheme.colorScheme.surfaceBright else MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "gemma-E4b",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    text = "RAM: 6GB • Storage: 2GB",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if (recommendedModel == "gemma-E4b") {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "✓ Selected",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

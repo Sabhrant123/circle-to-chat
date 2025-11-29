@@ -48,18 +48,24 @@ object ModelRecommendationEngine {
         val deviceSpecs = DeviceSpecsReader.readDeviceSpecs(context)
         
         Log.d(TAG, "Device Specs: $deviceSpecs")
-        
-        val modelScores = models.map { model ->
+        // Compute scores for each model
+        val scores = models.associateWith { model ->
             val score = calculateScore(deviceSpecs, model)
             Log.d(TAG, "Model: ${model.name}, Score: $score")
-            model.name to score
+            score
         }
-        
-        val recommendedModel = modelScores.maxByOrNull { it.second }?.first 
-            ?: models.first().name
-        
-        Log.d(TAG, "Recommended model: $recommendedModel")
-        
+
+        // Decision rule: prefer gemma-E4b only when its score is >= 75, otherwise recommend gemma-E2b
+        val e2 = models.firstOrNull { it.name == "gemma-E2b" }
+        val e4 = models.firstOrNull { it.name == "gemma-E4b" }
+
+        val recommendedModel = when {
+            e4 != null && (scores[e4] ?: 0) >= 75 -> e4.name
+            e2 != null -> e2.name
+            else -> models.first().name
+        }
+
+        Log.d(TAG, "Recommended model (threshold rule): $recommendedModel")
         return recommendedModel
     }
 
@@ -108,8 +114,17 @@ object ModelRecommendationEngine {
             Triple(model.name, score, explanation)
         }
 
-        val best = perModelDetails.maxByOrNull { it.second } ?: Triple(models.first().name, 0, "No details")
-        return best.first to best.third
+        // Apply the same threshold rule to choose the recommended model for details
+        val e2Detail = perModelDetails.firstOrNull { it.first == "gemma-E2b" }
+        val e4Detail = perModelDetails.firstOrNull { it.first == "gemma-E4b" }
+
+        val recommended = if (e4Detail != null && e4Detail.second >= 75) {
+            e4Detail
+        } else {
+            e2Detail ?: perModelDetails.first()
+        }
+
+        return recommended.first to recommended.third
     }
 
     /**
